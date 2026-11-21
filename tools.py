@@ -347,6 +347,8 @@ def add_to_watchlist(watchlist, player_name, priority="medium", note="", **_):
     row, msg = _find_player(player_name)
     if row is None:
         return f"Not added. {msg}"
+    if priority not in ("high", "medium", "low"):
+        priority = "medium"  # never store free text from the model in this field
     entry = {"player": row["player"], "team": row["team"], "league": row["league"],
              "priority": priority, "note": str(note)[:200]}
     if any(w["player"] == entry["player"] for w in watchlist):

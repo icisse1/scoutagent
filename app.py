@@ -5,8 +5,10 @@ Local:   streamlit run app.py          (key in .env)
 Hosted:  Streamlit Community Cloud     (key in the app's Secrets, never in the UI or repo)
 """
 import datetime as dt
+import html
 import json
 import os
+import re
 import threading
 
 import streamlit as st
@@ -49,6 +51,32 @@ def take_daily_slot():
         return True
 
 
+# ---------- output guardrail ----------
+# Model text is untrusted (a prompt injection can shape it). Never render it as HTML, and never let it
+# load images or carry links: an <img> or ![](url) would make the visitor's browser send data to an
+# outside server (exfiltration). Found in the Milestone III security review and fixed here.
+_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_REFDEF = re.compile(r"(?m)^\s*\[[^\]]+\]:\s*\S+.*$")
+_AUTOLINK = re.compile(r"<(https?://[^>]+)>")
+
+
+def esc(text):
+    """For text placed inside our own HTML."""
+    return html.escape(str(text or ""))
+
+
+def safe_md(text):
+    """For model markdown: keep tables and bold, drop images, links and raw URLs' clickability."""
+    t = str(text or "")
+    t = _IMG.sub("[image removed]", t)
+    t = _LINK.sub(r"\1", t)
+    t = _REFDEF.sub("", t)
+    t = _AUTOLINK.sub(r"\1", t)
+    t = re.sub(r"https?://", "hxxp://", t)  # visible but not a live link
+    return t
+
+
 st.set_page_config(page_title="ScoutAgent", page_icon="⚽", layout="wide")
 st.markdown("""
 <style>
@@ -82,7 +110,7 @@ with st.sidebar:
     st.subheader("Watchlist (sandbox)")
     if ss.watchlist:
         for w in ss.watchlist:
-            st.markdown(f"- **{w['player']}** ({w['team']}), {w['priority']}")
+            st.markdown(f"- **{esc(w['player'])}** ({esc(w['team'])}), {esc(w['priority'])}")
     else:
         st.caption("Empty. Ask the agent to add a player; you will be asked to approve.")
     st.divider()
@@ -95,23 +123,23 @@ with st.sidebar:
 def render_event(e):
     t = e["type"]
     if t == "tool":
-        st.markdown(f"<div class='reason'>🔎 <b>Scout</b> · <code>{e['tool']}</code><br>{e['reasoning']}</div>",
+        st.markdown(f"<div class='reason'>🔎 <b>Scout</b> · <code>{esc(e['tool'])}</code><br>{esc(e['reasoning'])}</div>",
                     unsafe_allow_html=True)
         with st.expander("Arguments and observation"):
             st.code(json.dumps(e["args"], indent=2, ensure_ascii=False), language="json")
             st.code(e["observation"], language="text")
     elif t == "gate_request":
-        st.markdown(f"<div class='reason'>✋ <b>Scout</b> asks to run <code>{e['tool']}</code><br>"
-                    f"{e['reasoning']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='reason'>✋ <b>Scout</b> asks to run <code>{esc(e['tool'])}</code><br>"
+                    f"{esc(e['reasoning'])}</div>", unsafe_allow_html=True)
     elif t == "gate_decision":
         icon = "✅" if e["decision"] == "approved" else "⛔"
-        st.markdown(f"{icon} **Human decision: {e['decision']}** · {e['observation']}")
+        st.markdown(f"{icon} **Human decision: {e['decision']}** · {safe_md(e['observation'])}")
     elif t == "draft":
         with st.expander("Scout draft (before Critic review)"):
-            st.markdown(e["text"])
+            st.markdown(safe_md(e["text"]))
     elif t == "critic":
         badge = "✅ PASS" if e["verdict"] == "pass" else "🔁 REVISE"
-        body = "<br>".join(f"• {p}" for p in e["problems"]) or "Every claim is backed by a tool result."
+        body = "<br>".join(f"• {esc(p)}" for p in e["problems"]) or "Every claim is backed by a tool result."
         st.markdown(f"<div class='critic'>🧐 <b>Critic</b> · {badge}<br><span class='small'>{body}</span></div>",
                     unsafe_allow_html=True)
     elif t == "guard":
@@ -127,7 +155,7 @@ def render_turn(turn):
                          f"{tr['llm_calls']} LLM calls · {tr.get('seconds', '?')} s", expanded=False):
             for e in tr["events"]:
                 render_event(e)
-        st.markdown(tr["final_answer"] or "_No answer_")
+        st.markdown(safe_md(tr["final_answer"]) or "_No answer_")
         cv = tr.get("critic_verdict")
         if cv:
             st.caption(f"Critic: {cv['verdict'].upper()} after {cv['revisions']} revision(s) · "
