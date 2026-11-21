@@ -3,6 +3,7 @@ llm.py: small wrapper around FREE TIER LLM providers.
 
 Supported providers (both have a free tier and an OpenAI compatible API):
   gemini : GEMINI_API_KEY  (free key at https://aistudio.google.com/apikey)   <- default
+           model 'auto' = newest Flash-Lite (about 500 free requests/day vs about 20 for Flash)
   groq   : GROQ_API_KEY    (free key at https://console.groq.com/keys)
 
 The key is read from a local .env file (never committed or submitted) or typed
@@ -20,7 +21,7 @@ import time
 
 PROVIDERS = {
     # name: (env var for key, default model, OpenAI compatible base URL)
-    "gemini": ("GEMINI_API_KEY", "gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/openai/"),
+    "gemini": ("GEMINI_API_KEY", "auto", "https://generativelanguage.googleapis.com/v1beta/openai/"),
     "groq": ("GROQ_API_KEY", "openai/gpt-oss-120b", "https://api.groq.com/openai/v1"),
 }
 
@@ -63,6 +64,25 @@ class LLM:
             raise ValueError(f"No API key. Put {env}=... in a .env file or paste it in the sidebar.")
         self.client = openai.OpenAI(api_key=key, base_url=base_url)
         self._openai = openai
+        if provider == "gemini" and self.model == "auto":
+            # Free tier (late 2026): Flash models allow about 20 requests/day, Flash-Lite about 500/day.
+            # Pick the newest Flash-Lite model available to this key, and remember it.
+            self.model = self._pick_flash_lite()
+            os.environ["SCOUT_MODEL"] = self.model
+
+    def _pick_flash_lite(self):
+        import re as _re
+        try:
+            ids = [m.id.split("/")[-1] for m in self.client.models.list()]
+        except Exception:
+            ids = []
+        bad = ("image", "tts", "audio", "live", "embedding", "thinking")
+        lite = [i for i in ids if "flash-lite" in i and not any(b in i for b in bad)]
+
+        def rank(i):
+            v = _re.search(r"gemini-(\d+(?:\.\d+)?)", i)
+            return (float(v.group(1)) if v else 0.0, "preview" not in i and "exp" not in i, -len(i))
+        return max(lite, key=rank) if lite else "gemini-2.5-flash-lite"
 
     def chat(self, system, messages, tools=None):
         """Returns {"text": str, "tool_calls": [{"id","name","args"}], "usage": {...}}"""
