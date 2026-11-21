@@ -60,10 +60,16 @@ if not done and os.path.exists(runs_path):  # resume after a page refresh
         done[(r["case"], r["run"])] = r
 
 total = len(cases) * k
-st.write(f"Finished runs: **{sum(1 for key in done if key[1] <= k)} / {total}** (finished runs are skipped, "
-         "so you can press Run again to resume after a rate limit).")
+st.write(f"Finished runs: **{sum(1 for key in done if key[1] <= k)} / {total}** (passing and failing runs are kept; runs that crashed on an API error are retried "
+         "when you press Run again).")
 
-if st.button("▶ Run evaluation", type="primary"):
+b1, b2 = st.columns([1, 1])
+if b2.button("🗑 Reset results (start over)"):
+    ss.eval_done[tag] = {}
+    if os.path.exists(runs_path):
+        os.remove(runs_path)
+    st.rerun()
+if b1.button("▶ Run evaluation", type="primary"):
     llm = LLM(detect_provider())
     system = ScoutSystem(llm, max_steps=6, use_critic=(tag == "critic"))
     bar = st.progress(0.0)

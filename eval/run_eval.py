@@ -118,7 +118,7 @@ def run_one(system, case, run):
                 "seconds": round(time.time() - t0, 1)}
     except Exception as e:  # an API error counts as a failed run, and is recorded
         return {"case": case["id"], "kind": case["kind"], "run": run, "pass": False,
-                "fails": [f"error: {type(e).__name__}: {str(e)[:200]}"], "answer": None,
+                "fails": [f"error: {type(e).__name__}: {str(getattr(e, 'body', '') or e)[:300]}"], "answer": None,
                 "seconds": round(time.time() - t0, 1), "quota": "RateLimit" in type(e).__name__}
 
 
@@ -126,8 +126,9 @@ def run_all(system, cases, k, done, runs_path, sleep=4, on_result=None):
     """Run every case k times, skipping finished runs. Stops early on a quota error (resume later)."""
     for case in cases:
         for run in range(1, k + 1):
-            if (case["id"], run) in done:
-                continue
+            prev = done.get((case["id"], run))
+            if prev and not any(str(f).startswith("error") for f in prev.get("fails", [])):
+                continue  # finished runs are kept; runs that crashed on an API error are retried
             rec = run_one(system, case, run)
             if rec.get("quota"):
                 print("Rate limit / quota hit. Stopping; run again later to resume.")

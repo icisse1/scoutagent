@@ -70,6 +70,16 @@ class LLM:
             self.model = self._pick_flash_lite()
             os.environ["SCOUT_MODEL"] = self.model
 
+    def _tool_call_out(self, tc):
+        out = {"id": tc["id"], "type": "function",
+               "function": {"name": tc["name"], "arguments": json.dumps(tc["args"])}}
+        if tc.get("extra_content"):
+            out["extra_content"] = tc["extra_content"]
+        elif self.provider == "gemini":
+            # documented fallback when no signature is available (for example the first call)
+            out["extra_content"] = {"google": {"thought_signature": "skip_thought_signature_validator"}}
+        return out
+
     def _pick_flash_lite(self):
         import re as _re
         try:
@@ -93,8 +103,7 @@ class LLM:
             elif m["role"] == "assistant":
                 d = {"role": "assistant", "content": m.get("text") or ""}
                 if m.get("tool_calls"):
-                    d["tool_calls"] = [{"id": tc["id"], "type": "function", "function": {
-                        "name": tc["name"], "arguments": json.dumps(tc["args"])}} for tc in m["tool_calls"]]
+                    d["tool_calls"] = [self._tool_call_out(tc) for tc in m["tool_calls"]]
                 msgs.append(d)
             else:
                 for r in m["results"]:
@@ -129,7 +138,16 @@ class LLM:
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {"_raw": tc.function.arguments}
-            calls.append({"id": tc.id or f"call_{i}", "name": tc.function.name, "args": args})
+            # Gemini 3 models attach a "thought signature" to each tool call (in extra_content).
+            # It must be sent back unchanged on the next request, or the API answers 400.
+            try:
+                extra = (tc.model_dump(exclude_none=True) or {}).get("extra_content")
+            except Exception:
+                extra = None
+            call = {"id": tc.id or f"call_{i}", "name": tc.function.name, "args": args}
+            if extra:
+                call["extra_content"] = extra
+            calls.append(call)
         usage = {}
         if getattr(r, "usage", None):
             usage = {"input_tokens": r.usage.prompt_tokens, "output_tokens": r.usage.completion_tokens}
